@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-router"
+version = "0.1.0"
+description = "Smart LLM router: route each request to the cheapest capable model, with policies, fallbacks, and cost/quality tracking."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Anusha Mukka", email = "hello@anushamukka.com" },
+]
+keywords = ["llm", "routing", "cost-optimization", "ai-infrastructure"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6"]
+test = ["pytest>=7"]
+dev = ["pytest>=7", "pyyaml>=6"]
+
+[project.scripts]
+llm-router = "llm_router.cli:main"
+
+[project.urls]
+Homepage = "https://anushamukka.com"
+Repository = "https://github.com/anushamukka9/llm-router"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
