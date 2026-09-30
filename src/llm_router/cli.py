@@ -57,6 +57,19 @@ def _cmd_route(args) -> int:
         min_context=args.min_context,
         max_cost_usd=args.budget,
     )
+    if args.dry_run:
+        try:
+            plan = router.dry_run(
+                args.prompt,
+                policy=args.policy,
+                constraints=constraints,
+                max_tokens=args.max_tokens,
+            )
+        except (NoEligibleModelError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        _print_dry_run(plan)
+        return 0
     try:
         completion, decision, attempted = router.execute(
             args.prompt,
@@ -71,6 +84,25 @@ def _cmd_route(args) -> int:
     if len(attempted) > 1:
         print(f"note: fallbacks used, attempts: {' -> '.join(attempted)}")
     return 0
+
+
+def _print_dry_run(plan: dict) -> None:
+    print("dry run: no request will be executed")
+    print(f"policy        : {plan['policy']}")
+    print(f"reason        : {plan['reason']}")
+    print(f"est. in tokens: {plan['estimated_input_tokens']} "
+          f"(prompt {plan['prompt_chars']} chars, max {plan['max_tokens']} out)")
+    print(f"chosen model  : {plan['chosen_model']} "
+          f"(est. ${plan['estimated_cost_usd']:.6f})")
+    if plan["fallbacks"]:
+        print("fallbacks     : " + ", ".join(plan["fallbacks"]))
+    print(f"{'MODEL':<14}{'PROVIDER':<10}{'QUALITY':>8}{'EST.COST':>12}  ROLE")
+    for r in plan["eligible_models"]:
+        role = "chosen" if r["chosen"] else ("fallback" if r["fallback"] else "")
+        print(
+            f"{r['model']:<14}{r['provider']:<10}{r['quality']:>8.1f}"
+            f"${r['est_cost_usd']:>11.6f}  {role}"
+        )
 
 
 def _cmd_compare(args) -> int:
@@ -163,7 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_route = sub.add_parser("route", help="route and serve a single prompt")
     p_route.add_argument("prompt", help="the user prompt to serve")
     p_route.add_argument("--policy", type=_parse_policy, default=Policy.CHEAPEST_FIRST,
-                         help="cheapest-first | quality-first | budget-capped")
+                         help="cheapest-first | quality-first | budget-capped | balanced")
+    p_route.add_argument("--dry-run", action="store_true",
+                         help="print the routing plan without executing the request")
     p_route.add_argument("--min-quality", type=float, default=0.0)
     p_route.add_argument("--min-context", type=int, default=0)
     p_route.add_argument("--budget", type=float, default=None,
