@@ -41,18 +41,28 @@ ordering, so they only need to be consistent across your fleet.
 |---|---|
 | `cheapest-first` | Lowest estimated cost among models meeting all constraints. |
 | `quality-first` | Highest quality score among eligible models. |
+| `balanced` | Best quality-per-dollar tradeoff: maximizes (quality/100 - cost/max_cost) over the eligible pool, ties broken toward cheaper. |
 | `budget-capped` | Highest quality whose estimated cost stays under `max_cost_usd`. |
+
+### Dry runs
+
+`router.dry_run(prompt, policy=..., constraints=...)` returns the routing plan
+without touching any backend: chosen model, reason, estimated tokens and cost,
+the ordered fallback chain, and a per-model cost table for the eligible pool.
+The CLI exposes it as `llm-router route "..." --dry-run`. Use it to preview
+policy changes before they spend money, or to unit-test routing behaviour
+without registering backends.
 
 ## 3. Set hard constraints
 
 `RoutingConstraints` are non-negotiable: a model that violates any of them
 is never chosen.
 
-- `required_features` — e.g. `("vision",)` for image inputs, `("tools",)` for function calling.
-- `min_quality` — floor on your quality score.
-- `min_context` — prompts longer than a model's window exclude it.
-- `max_cost_usd` — ceiling on estimated input cost; required for `budget-capped`.
-- `provider` — restrict to one provider.
+- `required_features` - e.g. `("vision",)` for image inputs, `("tools",)` for function calling.
+- `min_quality` - floor on your quality score.
+- `min_context` - prompts longer than a model's window exclude it.
+- `max_cost_usd` - ceiling on estimated input cost; required for `budget-capped`.
+- `provider` - restrict to one provider.
 
 ```python
 from llm_router import ModelCatalog, Policy, Router, RoutingConstraints, MockBackend
@@ -73,7 +83,7 @@ print(decision.model.name, f"${completion.cost_usd:.6f}")
 
 Every decision carries an ordered fallback chain (next-best models under the
 same policy). `execute()` walks the chain when a backend raises
-`BackendError` — a flaky or down model never takes the request down with it.
+`BackendError` - a flaky or down model never takes the request down with it.
 `attempted` tells you which models were tried, and the ledger records it.
 
 ## 5. Read the ledger
@@ -96,6 +106,14 @@ print(ledger.summary())
 
 `savings_vs(baseline_cost_per_request)` answers the question leadership asks:
 "how much did routing save versus sending everything to the flagship model?"
+
+The ledger also persists to a JSONL request log - one JSON object per line,
+safe to tail or grep:
+
+```python
+ledger.save_jsonl("requests.jsonl")          # returns the record count
+restored = UsageLedger.load_jsonl("requests.jsonl")
+```
 
 ## 6. CLI
 
