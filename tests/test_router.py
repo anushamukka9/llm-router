@@ -173,6 +173,79 @@ def test_compare_orders_by_cost():
     assert rows[0]["model"] == "nano-1"
 
 
+# ---- balanced policy --------------------------------------------------
+
+
+def test_balanced_picks_mid_tier_tradeoff():
+    router = make_router()
+    decision = router.route(
+        "hello",
+        policy=Policy.BALANCED,
+        constraints=RoutingConstraints(min_quality=55),
+    )
+    # flash-2: clearly better than nano-1, far cheaper than pro-1.
+    assert decision.model.name == "flash-2"
+    assert "tradeoff" in decision.reason
+
+
+def test_balanced_single_candidate_still_works():
+    router = make_router()
+    decision = router.route(
+        "hello",
+        policy=Policy.BALANCED,
+        constraints=RoutingConstraints(required_features=["long-context"]),
+    )
+    assert decision.model.name == "longctx-1"
+
+
+def test_balanced_within_hard_constraints():
+    router = make_router()
+    decision = router.route(
+        "hello",
+        policy=Policy.BALANCED,
+        constraints=RoutingConstraints(required_features=["vision"], min_quality=60),
+    )
+    assert decision.model.name == "vision-lite"  # only two vision models; cheaper wins on tradeoff
+
+
+# ---- dry run ----------------------------------------------------------
+
+
+def test_dry_run_returns_plan_without_executing():
+    catalog = make_catalog()
+    router = Router(catalog)
+    # No backends registered at all: dry_run must still work.
+    plan = router.dry_run(
+        "hello", constraints=RoutingConstraints(min_quality=55)
+    )
+    assert plan["policy"] == "cheapest-first"
+    assert plan["chosen_model"] == "nano-1"
+    assert plan["estimated_input_tokens"] > 0
+    assert plan["fallbacks"]  # non-empty fallback chain
+    models = {r["model"] for r in plan["eligible_models"]}
+    assert "nano-1" in models
+    chosen = [r for r in plan["eligible_models"] if r["chosen"]]
+    assert len(chosen) == 1 and chosen[0]["model"] == "nano-1"
+
+
+def test_dry_run_respects_constraints_and_budget_cap():
+    router = make_router()
+    plan = router.dry_run(
+        "hello",
+        policy=Policy.BUDGET_CAPPED,
+        constraints=RoutingConstraints(max_cost_usd=0.05),
+    )
+    assert plan["policy"] == "budget-capped"
+    assert all(r["est_cost_usd"] <= 0.05 for r in plan["eligible_models"])
+    assert plan["chosen_model"] in {r["model"] for r in plan["eligible_models"]}
+
+
+def test_dry_run_no_eligible_model_raises():
+    router = make_router()
+    with pytest.raises(NoEligibleModelError):
+        router.dry_run("hello", constraints=RoutingConstraints(min_quality=99.9))
+
+
 # ---- tracking ---------------------------------------------------------
 
 
@@ -198,6 +271,24 @@ def test_savings_vs_baseline():
     ledger.log(model="nano-1", policy="cheapest-first", input_tokens=100,
                output_tokens=50, cost_usd=0.01, quality=62.0)
     assert ledger.savings_vs(1.00) == pytest.approx(0.99)
+
+
+def test_ledger_jsonl_roundtrip(tmp_path):
+    ledger = UsageLedger()
+    ledger.log(model="nano-1", policy="cheapest-first", input_tokens=100,
+               output_tokens=50, cost_usd=0.01, quality=62.0,
+               attempted=["nano-1", "flash-2"])
+    ledger.log(model="pro-1", policy="quality-first", input_tokens=200,
+               output_tokens=100, cost_usd=0.50, quality=91.0)
+    path = tmp_path / "ledger.jsonl"
+    assert ledger.save_jsonl(path) == 2
+
+    restored = UsageLedger.load_jsonl(path)
+    assert restored.total_requests == 2
+    assert restored.total_cost == pytest.approx(0.51)
+    assert restored.records[0].attempted == ["nano-1", "flash-2"]
+    assert restored.records[1].model == "pro-1"
+    assert restored.summary()["per_model"]["nano-1"]["requests"] == 1
 
 
 # ---- backends ---------------------------------------------------------
