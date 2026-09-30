@@ -1,18 +1,19 @@
 # llm-router
 
 **Route to the cheapest capable model.** llm-router is a small, dependency-free
-Python library that picks the cheapest LLM able to handle each request —
+Python library that picks the cheapest LLM able to handle each request -
 configurable model catalogs (cost, quality, context window, capability flags),
-routing policies (`cheapest-first`, `quality-first`, `budget-capped`),
-automatic fallback chains on backend failure, and per-request cost/quality
-tracking. Ships with a CLI demo.
+routing policies (`cheapest-first`, `quality-first`, `balanced`,
+`budget-capped`), automatic fallback chains on backend failure, a dry-run mode
+that previews decisions without executing, and per-request cost/quality
+tracking with JSONL persistence. Ships with a CLI demo.
 
 ## Why
 
 Most LLM apps send every request to one flagship model and overpay for easy
 work: classification, extraction, rewrites, summaries. Routing each request
 to the cheapest model that meets its requirements (quality floor, features,
-context, budget) cuts spend with no code changes to prompts — and the ledger
+context, budget) cuts spend with no code changes to prompts - and the ledger
 proves the savings.
 
 ## Install
@@ -49,7 +50,15 @@ print(decision.model.name)   # nano-1
 print(completion.cost_usd)   # actual tracked cost
 ```
 
-Run the runnable example: `python examples/quickstart.py`.
+Run the runnable examples:
+
+```bash
+python examples/quickstart.py   # route three requests under different policies
+python examples/dry_run.py      # preview decisions + ledger JSONL round-trip
+```
+
+A sample catalog file lives at `examples/catalog.yaml` - point the CLI at it
+with `--catalog` (or copy it as a starting point for your own fleet).
 See [docs/usage.md](docs/usage.md) for the full guide.
 
 ## CLI demo
@@ -61,8 +70,13 @@ llm-router demo
 
 llm-router route "Summarize this log" --policy cheapest-first --min-quality 60
 llm-router route "Proofread this" --policy budget-capped --budget 0.02
+llm-router route "Draft a summary" --policy balanced --min-quality 60 --dry-run
 llm-router compare "Draft a release note" --catalog catalog.yaml
 ```
+
+`--dry-run` prints the routing plan (chosen model, cost estimate, fallback
+chain, per-model cost table) without executing the request - useful for
+previewing policy changes before they spend money.
 
 ## API
 
@@ -72,9 +86,9 @@ llm-router compare "Draft a release note" --catalog catalog.yaml
 | `ModelCatalog` | Fleet of specs; load from YAML/JSON; filter by features, quality, cost, context, provider. |
 | `ModelBackend` | Pluggable execution interface (`MockBackend` for offline, `OpenAICompatibleBackend` for any OpenAI-compatible endpoint). |
 | `Router` | `route()` picks a model under a policy + hard constraints; `execute()` serves it with fallback chains; `compare()` prices every model for a prompt. |
-| `Policy` | `cheapest-first`, `quality-first`, `budget-capped`. |
+| `Policy` | `cheapest-first`, `quality-first`, `balanced`, `budget-capped`. |
 | `RoutingConstraints` | Hard gates: required features, min quality, min context, provider, max cost. |
-| `UsageLedger` | Per-request log; summaries: total cost, tokens, avg quality, fallback rate, per-model aggregates, savings vs. baseline. |
+| `UsageLedger` | Per-request log; summaries: total cost, tokens, avg quality, fallback rate, per-model aggregates, savings vs. baseline. Persists to JSONL (`save_jsonl` / `load_jsonl`). |
 
 ## Architecture
 
@@ -98,11 +112,11 @@ docs/usage.md            # full usage guide
 ## Tests
 
 ```bash
-pytest            # 18 tests: routing policies, constraints, fallbacks, ledger, backends
+pytest            # 25 tests: routing policies, constraints, dry runs, fallbacks, ledger, backends
 ```
 
 ## License
 
-MIT — Copyright (c) 2026 Anusha Mukka. See [LICENSE](LICENSE).
+MIT - Copyright (c) 2026 Anusha Mukka. See [LICENSE](LICENSE).
 
 Author: Anusha Mukka · [anushamukka.com](https://anushamukka.com)
