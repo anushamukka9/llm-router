@@ -18,6 +18,7 @@ class Policy(str, Enum):
     CHEAPEST_FIRST = "cheapest-first"
     QUALITY_FIRST = "quality-first"
     BUDGET_CAPPED = "budget-capped"
+    BALANCED = "balanced"
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,18 @@ class Router:
         elif policy == Policy.QUALITY_FIRST:
             ordered = sorted(pool, key=lambda s: (-s.quality, cost[s.name]))
             reason = "highest quality among eligible models"
+        elif policy == Policy.BALANCED:
+            # Cost-vs-quality tradeoff: maximize quality while penalizing
+            # cost, both normalized to [0, 1] within the eligible pool.
+            # quality/100 needs no normalization; cost is divided by the
+            # pool's max cost. Ties break toward the cheaper model.
+            max_cost = max(cost[s.name] for s in pool)
+            def tradeoff(s: ModelSpec) -> tuple:
+                q = s.quality / 100.0
+                c = cost[s.name] / max_cost if max_cost > 0 else 0.0
+                return (q - c, -cost[s.name])
+            ordered = sorted(pool, key=tradeoff, reverse=True)
+            reason = "best quality-per-dollar tradeoff among eligible models"
         else:  # pragma: no cover - defensive
             raise ValueError(f"unknown policy: {policy!r}")
 
@@ -130,6 +143,68 @@ class Router:
             fallbacks=fallbacks,
             constraints=constraints,
         )
+
+    # ---- dry run ------------------------------------------------------
+    def dry_run(
+        self,
+        prompt: str,
+        *,
+        policy: Policy = Policy.CHEAPEST_FIRST,
+        constraints: Optional[RoutingConstraints] = None,
+        max_tokens: int = 512,
+        fallback_depth: int = 2,
+    ) -> dict:
+        """Plan a routing decision without executing anything.
+
+        Returns the decision, the estimated input tokens, and a cost table
+        for every eligible model - useful for previews, debugging policies,
+        and unit tests. No backend is touched.
+        """
+        decision = self.route(
+            prompt,
+            policy=policy,
+            constraints=constraints,
+            max_tokens=max_tokens,
+            fallback_depth=fallback_depth,
+        )
+        constraints = constraints or RoutingConstraints()
+        in_tokens = _estimated_input_tokens(prompt)
+        pool = [
+            s
+            for s in self.catalog.candidates(
+                required_features=constraints.required_features,
+                min_quality=constraints.min_quality,
+                min_context=constraints.min_context,
+                provider=constraints.provider,
+            )
+            if _input_cost_ok(s, constraints, prompt)
+        ]
+        if policy == Policy.BUDGET_CAPPED and constraints.max_cost_usd is not None:
+            cap = constraints.max_cost_usd
+            pool = [s for s in pool if s.estimate_cost(in_tokens, max_tokens) <= cap]
+        table = [
+            {
+                "model": s.name,
+                "provider": s.provider,
+                "quality": s.quality,
+                "est_cost_usd": round(s.estimate_cost(in_tokens, max_tokens), 6),
+                "chosen": s.name == decision.model.name,
+                "fallback": s.name in {f.name for f in decision.fallbacks},
+            }
+            for s in pool
+        ]
+        table.sort(key=lambda r: r["est_cost_usd"])
+        return {
+            "prompt_chars": len(prompt),
+            "estimated_input_tokens": in_tokens,
+            "max_tokens": max_tokens,
+            "policy": decision.policy.value,
+            "reason": decision.reason,
+            "chosen_model": decision.model.name,
+            "estimated_cost_usd": round(decision.estimated_cost_usd, 6),
+            "fallbacks": [s.name for s in decision.fallbacks],
+            "eligible_models": table,
+        }
 
     # ---- execution with fallbacks -------------------------------------
     def execute(
