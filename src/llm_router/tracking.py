@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional
 
 
@@ -108,3 +110,40 @@ class UsageLedger:
             "fallback_rate": round(self.fallback_rate(), 4),
             "per_model": self.per_model(),
         }
+
+    # ---- persistence ----------------------------------------------------
+    def save_jsonl(self, path: str | Path) -> int:
+        """Append-style durable request log: one JSON object per line.
+
+        Returns the number of records written. The file can be tailed,
+        grepped, or loaded back with :meth:`load_jsonl`.
+        """
+        path = Path(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            for record in self.records:
+                fh.write(json.dumps(asdict(record)) + "\n")
+        return len(self.records)
+
+    @classmethod
+    def load_jsonl(cls, path: str | Path) -> "UsageLedger":
+        """Rebuild a ledger from a JSONL file written by :meth:`save_jsonl`."""
+        ledger = cls()
+        with open(Path(path), encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                ledger.records.append(
+                    RequestRecord(
+                        timestamp=data["timestamp"],
+                        model=data["model"],
+                        policy=data["policy"],
+                        input_tokens=int(data["input_tokens"]),
+                        output_tokens=int(data["output_tokens"]),
+                        cost_usd=float(data["cost_usd"]),
+                        quality=float(data["quality"]),
+                        attempted=list(data.get("attempted", [data["model"]])),
+                    )
+                )
+        return ledger
